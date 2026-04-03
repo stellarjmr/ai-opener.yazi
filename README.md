@@ -17,10 +17,8 @@ Terminal is auto-detected via `TMUX` and `TERM_PROGRAM` environment variables.
 
 ## Installation
 
-Copy or symlink the `ai-opener.yazi` directory to your yazi plugins folder:
-
 ```sh
-cp -r ai-opener.yazi ~/.config/yazi/plugins/
+ya pkg add stellarjmr/ai-opener
 ```
 
 ## Usage
