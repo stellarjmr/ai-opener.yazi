@@ -15,20 +15,97 @@ local state = {
 	terminal = nil, -- nil = auto-detect
 }
 
+local cached_terminal = nil
+local cached_kitty_listen = nil
+
+local KITTY_SOCKET_CANDIDATES = {
+	"unix:/tmp/mykitty",
+}
+
+local function verify_kitty_socket(sock)
+	local child = Command("kitty")
+		:arg({ "@", "--to", sock, "ls" })
+		:stdout(Command.PIPED)
+		:stderr(Command.PIPED)
+		:spawn()
+	if child then
+		local output = child:wait_with_output()
+		if output and output.status and output.status.success then
+			return true
+		end
+	end
+	return false
+end
+
+local function find_kitty_socket()
+	-- Try configured socket first
+	if state.kitty_listen_on then
+		return state.kitty_listen_on
+	end
+	-- Try known socket paths (verified with kitty @ ls)
+	for _, sock in ipairs(KITTY_SOCKET_CANDIDATES) do
+		if verify_kitty_socket(sock) then
+			return sock
+		end
+	end
+	-- Try glob /tmp/kitty-* and verify each
+	local child = Command("sh")
+		:arg({ "-c", "ls /tmp/kitty-* 2>/dev/null" })
+		:stdout(Command.PIPED)
+		:stderr(Command.PIPED)
+		:spawn()
+	if child then
+		local output = child:wait_with_output()
+		if output and output.status and output.status.success and output.stdout then
+			for path in string.gmatch(output.stdout, "[^\n]+") do
+				path = string.gsub(path, "%s+$", "")
+				if #path > 0 then
+					local sock = "unix:" .. path
+					if verify_kitty_socket(sock) then
+						return sock
+					end
+				end
+			end
+		end
+	end
+	return nil
+end
+
+local get_target_dir = ya.sync(function()
+	local h = cx.active.current.hovered
+	if h and h.cha.is_dir then
+		return tostring(h.url)
+	end
+	return tostring(cx.active.current.cwd)
+end)
+
 local function shell_escape(s)
 	return "'" .. string.gsub(s, "'", "'\\''") .. "'"
 end
 
-local function get_target_dir()
-	local h = cx.active.current.hovered
-	if h then
-		if h.cha.is_dir then
-			return tostring(h.url)
-		else
-			return tostring(h.url:parent())
+local function applescript_escape(s)
+	s = string.gsub(s, "\\", "\\\\")
+	s = string.gsub(s, '"', '\\"')
+	return '"' .. s .. '"'
+end
+
+local function read_env(name)
+	local child = Command("printenv")
+		:arg({ name })
+		:stdout(Command.PIPED)
+		:stderr(Command.PIPED)
+		:spawn()
+	if not child then
+		return nil
+	end
+	local output = child:wait_with_output()
+	if output and output.status and output.status.success and output.stdout then
+		local val = string.gsub(output.stdout, "%s+$", "")
+		if #val > 0 then
+			return val
 		end
 	end
-	return tostring(cx.active.current.cwd)
+	return nil
 end
 
 local function detect_terminal()
@@ -36,36 +113,76 @@ local function detect_terminal()
 		return state.terminal
 	end
 
-	if os.getenv("TMUX") then
-		return "tmux"
+	if cached_terminal then
+		return cached_terminal
 	end
 
-	local term = os.getenv("TERM_PROGRAM")
+	local term = read_env("TERM_PROGRAM")
 	if term == "kitty" then
-		return "kitty"
+		cached_terminal = "kitty"
+		cached_kitty_listen = read_env("KITTY_LISTEN_ON") or find_kitty_socket()
 	elseif term == "WezTerm" then
-		return "wezterm"
+		cached_terminal = "wezterm"
 	elseif term == "ghostty" then
-		return "ghostty"
+		cached_terminal = "ghostty"
 	elseif term == "iTerm.app" then
-		return "iterm"
-	elseif term == "Apple_Terminal" then
-		return "apple_terminal"
+		cached_terminal = "iterm"
+	elseif read_env("TMUX") then
+		cached_terminal = "tmux"
 	end
 
-	return "generic"
+	-- Fallback: probe kitty socket when env detection fails
+	if not cached_terminal then
+		local sock = find_kitty_socket()
+		if sock then
+			-- Verify it's a live kitty by trying kitty @ ls
+			local child = Command("kitty")
+				:arg({ "@", "--to", sock, "ls" })
+				:stdout(Command.PIPED)
+				:stderr(Command.PIPED)
+				:spawn()
+			if child then
+				local output = child:wait_with_output()
+				if output and output.status and output.status.success then
+					cached_terminal = "kitty"
+					cached_kitty_listen = sock
+				end
+			end
+		end
+	end
+
+	return cached_terminal
 end
 
 local function open_kitty(dir, cmd)
+	if not cached_kitty_listen then
+		return false, "kitty socket not found (add to kitty.conf: allow_remote_control yes, listen_on unix:/tmp/mykitty)"
+	end
+
+	-- Step 1: Launch a new tab with the user's default shell
 	local child, err = Command("kitty")
-		:arg({ "@", "launch", "--type=tab", "--cwd=" .. dir, "--", "sh", "-c", cmd })
+		:arg({ "@", "--to", cached_kitty_listen, "launch", "--type=tab", "--cwd", dir })
 		:stdout(Command.PIPED)
 		:stderr(Command.PIPED)
 		:spawn()
 	if not child then
 		return false, "Failed to spawn kitty: " .. (err or "unknown error")
 	end
-	child:wait()
+	local output = child:wait_with_output()
+	if not output or not output.status.success then
+		return false, "kitty launch failed on " .. cached_kitty_listen
+	end
+
+	-- Step 2: Send the command to the newly created tab
+	local child2, err2 = Command("kitty")
+		:arg({ "@", "--to", cached_kitty_listen, "send-text", "--match", "recent:0", cmd .. "; exit\r" })
+		:stdout(Command.PIPED)
+		:stderr(Command.PIPED)
+		:spawn()
+	if not child2 then
+		return false, "Failed to send text: " .. (err2 or "unknown error")
+	end
+	child2:wait()
 	return true
 end
 
@@ -84,7 +201,7 @@ end
 
 local function open_tmux(dir, cmd)
 	local child, err = Command("tmux")
-		:arg({ "new-window", "-c", dir, cmd })
+		:arg({ "new-window", "-c", dir, "sh", "-c", "sleep 0.2 && exec " .. cmd })
 		:stdout(Command.PIPED)
 		:stderr(Command.PIPED)
 		:spawn()
@@ -97,17 +214,15 @@ end
 
 local function open_ghostty(dir, cmd)
 	local script = string.format(
-		[[
-tell application "Ghostty"
+		[[tell application "Ghostty"
 	activate
 	set cfg to new surface configuration
 	set initial working directory of cfg to %s
 	set initial input of cfg to %s & "; exit\n"
 	new tab with configuration cfg
-end tell
-]],
-		shell_escape(dir),
-		shell_escape(cmd)
+end tell]],
+		applescript_escape(dir),
+		applescript_escape(cmd)
 	)
 	local child, err = Command("osascript")
 		:arg({ "-e", script })
@@ -117,50 +232,22 @@ end tell
 	if not child then
 		return false, "Failed to run osascript: " .. (err or "unknown error")
 	end
-	local output = child:wait_with_output()
-	if not output or not output.status.success then
-		-- Fallback: use keystroke-based approach for older ghostty
-		local fallback_script = string.format(
-			[[
-tell application "Ghostty"
-	activate
-end tell
-tell application "System Events"
-	keystroke "t" using command down
-	delay 0.3
-	keystroke "cd %s && %s" & return
-end tell
-]],
-			dir,
-			cmd
-		)
-		local child2, err2 = Command("osascript")
-			:arg({ "-e", fallback_script })
-			:stdout(Command.PIPED)
-			:stderr(Command.PIPED)
-			:spawn()
-		if not child2 then
-			return false, "Failed to run osascript fallback: " .. (err2 or "unknown error")
-		end
-		child2:wait()
-	end
+	child:wait()
 	return true
 end
 
 local function open_iterm(dir, cmd)
+	local full_cmd = "cd " .. shell_escape(dir) .. " && " .. cmd
 	local script = string.format(
-		[[
-tell application "iTerm2"
+		[[tell application "iTerm2"
 	tell current window
 		create tab with default profile
 		tell current session
-			write text "cd %s && %s"
+			write text %s
 		end tell
 	end tell
-end tell
-]],
-		shell_escape(dir),
-		cmd
+end tell]],
+		applescript_escape(full_cmd)
 	)
 	local child, err = Command("osascript")
 		:arg({ "-e", script })
@@ -171,63 +258,16 @@ end tell
 		return false, "Failed to run osascript: " .. (err or "unknown error")
 	end
 	child:wait()
-	return true
-end
-
-local function open_apple_terminal(dir, cmd)
-	local script = string.format(
-		[[
-tell application "Terminal"
-	activate
-	do script "cd %s && %s"
-end tell
-]],
-		shell_escape(dir),
-		cmd
-	)
-	local child, err = Command("osascript")
-		:arg({ "-e", script })
-		:stdout(Command.PIPED)
-		:stderr(Command.PIPED)
-		:spawn()
-	if not child then
-		return false, "Failed to run osascript: " .. (err or "unknown error")
-	end
-	child:wait()
-	return true
-end
-
-local function open_generic(dir, cmd)
-	local permit = ya.hide()
-	local child, err = Command("sh")
-		:arg({ "-c", "cd " .. shell_escape(dir) .. " && " .. cmd })
-		:stdin(Command.INHERIT)
-		:stdout(Command.INHERIT)
-		:stderr(Command.INHERIT)
-		:status()
-	if not child then
-		return false, "Failed to run command: " .. (err or "unknown error")
-	end
 	return true
 end
 
 local openers = {
-	kitty          = open_kitty,
-	wezterm        = open_wezterm,
-	tmux           = open_tmux,
-	ghostty        = open_ghostty,
-	iterm          = open_iterm,
-	apple_terminal = open_apple_terminal,
-	generic        = open_generic,
+	kitty   = open_kitty,
+	wezterm = open_wezterm,
+	tmux    = open_tmux,
+	ghostty = open_ghostty,
+	iterm   = open_iterm,
 }
-
-local function open_in_tab(terminal, dir, cmd)
-	local opener = openers[terminal]
-	if not opener then
-		return open_generic(dir, cmd)
-	end
-	return opener(dir, cmd)
-end
 
 function M:setup(opts)
 	if not opts then
@@ -239,6 +279,9 @@ function M:setup(opts)
 	if opts.terminal then
 		state.terminal = opts.terminal
 	end
+	if opts.kitty_listen_on then
+		state.kitty_listen_on = opts.kitty_listen_on
+	end
 	if opts.tools then
 		for name, tool in pairs(opts.tools) do
 			state.tools[name] = tool
@@ -247,7 +290,11 @@ function M:setup(opts)
 end
 
 function M:entry(job)
-	local tool_name = job.args[1] or state.default_tool
+	-- Compatible with yazi passing job as string or table
+	if type(job) == "string" then
+		job = { args = { job } }
+	end
+	local tool_name = (job.args and job.args[1]) or state.default_tool
 	local tool = state.tools[tool_name]
 	if not tool then
 		ya.notify({
@@ -271,8 +318,28 @@ function M:entry(job)
 	end
 
 	local terminal = detect_terminal()
-	local ok, err = open_in_tab(terminal, dir, tool.cmd)
+	if not terminal then
+		ya.notify({
+			title = "ai-opener",
+			content = "Cannot detect terminal. Set terminal in setup(), e.g. require('ai-opener'):setup({ terminal = 'kitty' })",
+			level = "error",
+			timeout = 5,
+		})
+		return
+	end
 
+	local opener = openers[terminal]
+	if not opener then
+		ya.notify({
+			title = "ai-opener",
+			content = "Unsupported terminal: " .. terminal,
+			level = "error",
+			timeout = 5,
+		})
+		return
+	end
+
+	local ok, err = opener(dir, tool.cmd)
 	if ok then
 		ya.notify({
 			title = "ai-opener",

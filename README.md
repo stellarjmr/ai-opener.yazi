@@ -5,15 +5,15 @@ from Yazi, with the working directory set to the current cursor position.
 
 ## Supported Terminals
 
-- **kitty** — via remote control (`kitty @`)
-- **WezTerm** — via `wezterm cli`
+- **kitty** — via remote control socket (`kitty @`, requires `listen_on`)
+- **WezTerm** — via `wezterm cli` (untested)
 - **tmux** — via `tmux new-window`
-- **Ghostty** — via AppleScript (macOS, 1.3.0+ preferred)
-- **iTerm2** — via AppleScript (macOS)
-- **Terminal.app** — via AppleScript (macOS)
-- **Generic** — runs inline in the current terminal as fallback
+- **Ghostty** — via AppleScript (macOS, 1.3.0+)
+- **iTerm2** — via AppleScript (macOS, untested)
 
-Terminal is auto-detected via `TMUX` and `TERM_PROGRAM` environment variables.
+Terminal is auto-detected. On macOS, the frontmost application is checked.
+For tmux, the plugin probes the `tmux` command. For kitty, the plugin searches
+for a live kitty socket.
 
 ## Installation
 
@@ -28,27 +28,27 @@ Add keybindings to `~/.config/yazi/keymap.toml`:
 ```toml
 [[mgr.prepend_keymap]]
 on   = "A"
-run  = "plugin ai-opener --args='claude'"
-desc = "Open Claude Code in new tab"
+run  = "plugin ai-opener claude"
+desc = "Open AI CLI in new tab"
 
 [[mgr.prepend_keymap]]
 on   = ["a", "c"]
-run  = "plugin ai-opener --args='claude'"
+run  = "plugin ai-opener claude"
 desc = "Open Claude Code in new tab"
 
 [[mgr.prepend_keymap]]
 on   = ["a", "x"]
-run  = "plugin ai-opener --args='codex'"
+run  = "plugin ai-opener codex"
 desc = "Open Codex CLI in new tab"
 
 [[mgr.prepend_keymap]]
 on   = ["a", "a"]
-run  = "plugin ai-opener --args='amp'"
+run  = "plugin ai-opener amp"
 desc = "Open Amp in new tab"
 
 [[mgr.prepend_keymap]]
 on   = ["a", "g"]
-run  = "plugin ai-opener --args='gemini'"
+run  = "plugin ai-opener gemini"
 desc = "Open Gemini CLI in new tab"
 ```
 
@@ -63,6 +63,9 @@ require("ai-opener"):setup({
 
     -- Override auto-detected terminal
     -- terminal = "kitty",
+
+    -- Custom kitty socket path (default: unix:/tmp/mykitty)
+    -- kitty_listen_on = "unix:/tmp/mykitty",
 
     -- Add custom tools or override built-in ones
     -- tools = {
@@ -85,14 +88,17 @@ require("ai-opener"):setup({
 
 1. Resolves the working directory from the hovered item (directory → use it;
    file → use its parent directory)
-2. Detects the terminal emulator via environment variables
+2. Detects the terminal emulator automatically
 3. Opens a new tab in that terminal with the AI tool running in the resolved
    directory
+4. The tab closes automatically when the AI tool exits
 
-## Notes
+## Terminal-Specific Notes
 
-- **kitty** requires `allow_remote_control yes` in `kitty.conf`.
-- **Ghostty** uses the 1.3.0+ AppleScript API (`new tab with configuration`),
-  with a keystroke-based fallback for older versions.
-- The **generic** fallback hides yazi and runs the tool inline — yazi resumes
-  when the tool exits.
+- **kitty** requires `allow_remote_control yes` and `listen_on` in `kitty.conf`:
+  ```
+  allow_remote_control yes
+  listen_on unix:/tmp/mykitty
+  ```
+- **Ghostty** requires version 1.3.0+ for AppleScript tab creation support.
+- **tmux** works inside any terminal emulator.
