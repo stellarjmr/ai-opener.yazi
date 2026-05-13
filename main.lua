@@ -58,9 +58,9 @@ local function find_kitty_socket()
 		local output = child:wait_with_output()
 		if output and output.status and output.status.success and output.stdout then
 			for path in string.gmatch(output.stdout, "[^\n]+") do
-				path = string.gsub(path, "%s+$", "")
-				if #path > 0 then
-					local sock = "unix:" .. path
+				local trimmed_path = string.gsub(path, "%s+$", "")
+				if #trimmed_path > 0 then
+					local sock = "unix:" .. trimmed_path
 					if verify_kitty_socket(sock) then
 						return sock
 					end
