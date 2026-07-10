@@ -1,6 +1,6 @@
 # ai-opener.yazi
 
-Open AI coding tools (Claude, Codex, Amp, Gemini, etc.) in a new terminal tab
+Open AI coding tools (Claude, Codex, Amp, Gemini, and Aider) in a new terminal tab
 from Yazi, with the working directory set to the current cursor position.
 
 ## Supported Terminals
@@ -11,9 +11,17 @@ from Yazi, with the working directory set to the current cursor position.
 - **Ghostty** — via AppleScript (macOS, 1.3.0+)
 - **iTerm2** — via AppleScript (macOS, untested)
 
-Terminal is auto-detected. On macOS, the frontmost application is checked.
-For tmux, the plugin probes the `tmux` command. For kitty, the plugin searches
-for a live kitty socket.
+Terminal is auto-detected from Yazi's environment and lightweight terminal
+probes. The `TMUX` environment variable takes precedence over `TERM_PROGRAM`.
+`TERM_PROGRAM` values are normalized with the same product-name aliases as the
+configured `terminal` option.
+For kitty, the plugin uses a configured `kitty_listen_on`, `KITTY_LISTEN_ON`, or
+a live kitty socket it can verify. Leading and trailing whitespace around
+`KITTY_LISTEN_ON` is ignored.
+
+## Compatibility
+
+Maintained against Yazi/Ya `26.5.6`.
 
 ## Installation
 
@@ -59,6 +67,11 @@ desc = "Open Amp in new tab"
 on   = ["a", "g"]
 run  = "plugin ai-opener gemini"
 desc = "Open Gemini CLI in new tab"
+
+[[mgr.prepend_keymap]]
+on   = ["a", "i"]
+run  = "plugin ai-opener aider"
+desc = "Open Aider in new tab"
 ```
 
 ## Configuration
@@ -67,23 +80,35 @@ Optionally configure the plugin in `~/.config/yazi/init.lua`:
 
 ```lua
 require("ai-opener"):setup({
-    -- Override auto-detected terminal
+    -- Override auto-detected terminal:
+    -- "kitty", "wezterm", "tmux", "ghostty", or "iterm".
+    -- Product-name aliases such as "WezTerm" and "iTerm2" are accepted.
+    -- Leading and trailing whitespace around terminal and kitty socket settings
+    -- is ignored.
     -- terminal = "kitty",
 
     -- Custom kitty socket path (default: unix:/tmp/mykitty)
     -- kitty_listen_on = "unix:/tmp/mykitty",
 
-    -- Add custom tools or override built-in ones
+    -- Add custom tools or override built-in ones.
+    -- Tool names are trimmed before registration.
+    -- Empty or all-whitespace names or commands are ignored.
     -- tools = {
     --     mycli = { cmd = "my-custom-ai --flag" },
+    --     quick = "quick-ai --flag",
     -- },
 })
 ```
 
+Malformed or temporarily inaccessible setup metadata is ignored, so a bad
+custom tool entry does not prevent other valid tools from registering.
+
 ### Built-in Tools
 
 Tool arguments are optional. No argument opens a terminal only; a known tool
-argument runs that command in the new tab/window.
+argument runs that command in the new tab/window. Leading and trailing
+whitespace around tool arguments is ignored. If Yazi tool argument metadata is
+temporarily unavailable or malformed, the plugin treats it as no tool argument.
 
 | Name     | Command  |
 |----------|----------|
@@ -103,6 +128,11 @@ argument runs that command in the new tab/window.
    the tool exits; without an argument, leaves the shell open without running an
    AI CLI
 
+If Yazi directory metadata is temporarily unavailable or malformed, the plugin
+falls back from the hovered item to the current directory, then reports a
+directory-resolution error instead of opening a terminal without a usable
+directory.
+
 ## Terminal-Specific Notes
 
 - **kitty** requires `allow_remote_control yes` and `listen_on` in `kitty.conf`:
@@ -112,3 +142,7 @@ argument runs that command in the new tab/window.
   ```
 - **Ghostty** requires version 1.3.0+ for AppleScript tab creation support.
 - **tmux** works inside any terminal emulator.
+
+## License
+
+MIT License - see [LICENSE](LICENSE) file for details.

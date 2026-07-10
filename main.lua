@@ -21,26 +21,148 @@ local KITTY_SOCKET_CANDIDATES = {
 	"unix:/tmp/mykitty",
 }
 
-local function verify_kitty_socket(sock)
-	local child = Command("kitty")
-		:arg({ "@", "--to", sock, "ls" })
-		:stdout(Command.PIPED)
-		:stderr(Command.PIPED)
-		:spawn()
-	if child then
-		local output = child:wait_with_output()
-		if output and output.status and output.status.success then
-			return true
+local function error_message(err)
+	if err == nil then
+		return "unknown error"
+	end
+	local ok, message = pcall(function()
+		return tostring(err)
+	end)
+	if ok and type(message) == "string" and message ~= "" then
+		return message
+	end
+	return "unknown error"
+end
+
+local function spawn_piped(name, args)
+	local ok, child, err = pcall(function()
+		return Command(name)
+			:arg(args)
+			:stdout(Command.PIPED)
+			:stderr(Command.PIPED)
+			:spawn()
+	end)
+	if ok then
+		return child, error_message(err)
+	end
+	return nil, error_message(child)
+end
+
+local function wait_with_output(child)
+	if not child then
+		return nil
+	end
+	local ok, output = pcall(function()
+		return child:wait_with_output()
+	end)
+	if ok then
+		return output
+	end
+	return nil
+end
+
+local function safe_field(value, key)
+	local ok, result = pcall(function()
+		if value then
+			return value[key]
 		end
+		return nil
+	end)
+	if ok then
+		return result
+	end
+	return nil
+end
+
+local function status_success(status)
+	return safe_field(status, "success") == true
+end
+
+local function output_success(output)
+	return status_success(safe_field(output, "status"))
+end
+
+local function normalize_tool(tool)
+	if type(tool) == "string" and tool:find("%S") then
+		return { cmd = tool }
+	end
+	if type(tool) == "table" then
+		local cmd = safe_field(tool, "cmd")
+		if type(cmd) == "string" and cmd:find("%S") then
+			return { cmd = cmd }
+		end
+	end
+	return nil
+end
+
+local function trim_string(value)
+	if type(value) ~= "string" then
+		return nil
+	end
+	return string.gsub(value, "^%s*(.-)%s*$", "%1")
+end
+
+local function normalize_terminal(terminal)
+	terminal = trim_string(terminal)
+	if not terminal or terminal == "" then
+		return nil
+	end
+
+	local lowered = string.lower(terminal)
+	if lowered == "kitty" then
+		return "kitty"
+	end
+	if lowered == "wezterm" then
+		return "wezterm"
+	end
+	if lowered == "tmux" then
+		return "tmux"
+	end
+	if lowered == "ghostty" then
+		return "ghostty"
+	end
+	if lowered == "iterm" or lowered == "iterm2" or lowered == "iterm.app" then
+		return "iterm"
+	end
+	return terminal
+end
+
+local function normalize_tool_name(name)
+	name = trim_string(name)
+	if name and name ~= "" then
+		return name
+	end
+	return nil
+end
+
+local function tool_name_from_job(job)
+	if type(job) == "string" then
+		return normalize_tool_name(job)
+	end
+	if type(job) ~= "table" then
+		return nil
+	end
+
+	local args = safe_field(job, "args")
+	if type(args) == "string" then
+		return normalize_tool_name(args)
+	end
+	if type(args) == "table" then
+		return normalize_tool_name(safe_field(args, 1))
+	end
+	return nil
+end
+
+local function verify_kitty_socket(sock)
+	local child = spawn_piped("kitty", { "@", "--to", sock, "ls" })
+	local output = wait_with_output(child)
+	if output_success(output) then
+		return true
 	end
 	return false
 end
 
 local function find_kitty_socket()
-	-- Try configured socket first
-	if state.kitty_listen_on then
-		return state.kitty_listen_on
-	end
 	-- Try known socket paths (verified with kitty @ ls)
 	for _, sock in ipairs(KITTY_SOCKET_CANDIDATES) do
 		if verify_kitty_socket(sock) then
@@ -48,15 +170,12 @@ local function find_kitty_socket()
 		end
 	end
 	-- Try glob /tmp/kitty-* and verify each
-	local child = Command("sh")
-		:arg({ "-c", "ls /tmp/kitty-* 2>/dev/null" })
-		:stdout(Command.PIPED)
-		:stderr(Command.PIPED)
-		:spawn()
+	local child = spawn_piped("sh", { "-c", "ls /tmp/kitty-* 2>/dev/null" })
 	if child then
-		local output = child:wait_with_output()
-		if output and output.status and output.status.success and output.stdout then
-			for path in string.gmatch(output.stdout, "[^\n]+") do
+		local output = wait_with_output(child)
+		local stdout = safe_field(output, "stdout")
+		if output_success(output) and type(stdout) == "string" then
+			for path in string.gmatch(stdout, "[^\n]+") do
 				local trimmed_path = string.gsub(path, "%s+$", "")
 				if #trimmed_path > 0 then
 					local sock = "unix:" .. trimmed_path
@@ -70,12 +189,36 @@ local function find_kitty_socket()
 	return nil
 end
 
-local get_target_dir = ya.sync(function()
-	local h = cx.active.current.hovered
-	if h and h.cha.is_dir then
-		return tostring(h.url)
+local function safe_tostring(value)
+	local ok, str = pcall(function()
+		return tostring(value)
+	end)
+	if ok and type(str) == "string" and str ~= "" then
+		return str
 	end
-	return tostring(cx.active.current.cwd)
+	return nil
+end
+
+local get_target_dir = ya.sync(function()
+	local active = safe_field(cx, "active")
+	local current = safe_field(active, "current")
+	if not current then
+		return nil
+	end
+	local h = safe_field(current, "hovered")
+	local cha = safe_field(h, "cha")
+	local url = safe_field(h, "url")
+	if h and cha and safe_field(cha, "is_dir") and url then
+		local hovered = safe_tostring(url)
+		if hovered then
+			return hovered
+		end
+	end
+	local cwd = safe_field(current, "cwd")
+	if cwd then
+		return safe_tostring(cwd)
+	end
+	return nil
 end)
 
 local function shell_escape(s)
@@ -88,27 +231,46 @@ local function applescript_escape(s)
 	return '"' .. s .. '"'
 end
 
+local function wait_failed(child)
+	local ok, status = pcall(function()
+		return child:wait()
+	end)
+	return not ok or not status_success(status)
+end
+
 local function read_env(name)
-	local child = Command("printenv")
-		:arg({ name })
-		:stdout(Command.PIPED)
-		:stderr(Command.PIPED)
-		:spawn()
+	local child = spawn_piped("printenv", { name })
 	if not child then
 		return nil
 	end
-	local output = child:wait_with_output()
-	if output and output.status and output.status.success and output.stdout then
-		local val = string.gsub(output.stdout, "%s+$", "")
-		if #val > 0 then
+	local output = wait_with_output(child)
+	local stdout = safe_field(output, "stdout")
+	if output_success(output) and stdout then
+		local val = trim_string(stdout)
+		if val and val ~= "" then
 			return val
 		end
 	end
 	return nil
 end
 
+local function resolve_kitty_socket()
+	if state.kitty_listen_on then
+		return state.kitty_listen_on
+	end
+	if cached_kitty_listen then
+		return cached_kitty_listen
+	end
+
+	cached_kitty_listen = read_env("KITTY_LISTEN_ON") or find_kitty_socket()
+	return cached_kitty_listen
+end
+
 local function detect_terminal()
 	if state.terminal then
+		if state.terminal == "kitty" then
+			cached_kitty_listen = resolve_kitty_socket()
+		end
 		return state.terminal
 	end
 
@@ -116,33 +278,32 @@ local function detect_terminal()
 		return cached_terminal
 	end
 
-	local term = read_env("TERM_PROGRAM")
-	if term == "kitty" then
-		cached_terminal = "kitty"
-		cached_kitty_listen = read_env("KITTY_LISTEN_ON") or find_kitty_socket()
-	elseif term == "WezTerm" then
-		cached_terminal = "wezterm"
-	elseif term == "ghostty" then
-		cached_terminal = "ghostty"
-	elseif term == "iTerm.app" then
-		cached_terminal = "iterm"
-	elseif read_env("TMUX") then
+	local tmux = read_env("TMUX")
+	if tmux then
 		cached_terminal = "tmux"
+	else
+		local term = normalize_terminal(read_env("TERM_PROGRAM"))
+		if term == "kitty" then
+			cached_terminal = "kitty"
+			cached_kitty_listen = resolve_kitty_socket()
+		elseif term == "wezterm" then
+			cached_terminal = "wezterm"
+		elseif term == "ghostty" then
+			cached_terminal = "ghostty"
+		elseif term == "iterm" then
+			cached_terminal = "iterm"
+		end
 	end
 
 	-- Fallback: probe kitty socket when env detection fails
 	if not cached_terminal then
-		local sock = find_kitty_socket()
+		local sock = resolve_kitty_socket()
 		if sock then
 			-- Verify it's a live kitty by trying kitty @ ls
-			local child = Command("kitty")
-				:arg({ "@", "--to", sock, "ls" })
-				:stdout(Command.PIPED)
-				:stderr(Command.PIPED)
-				:spawn()
+			local child = spawn_piped("kitty", { "@", "--to", sock, "ls" })
 			if child then
-				local output = child:wait_with_output()
-				if output and output.status and output.status.success then
+				local output = wait_with_output(child)
+				if output_success(output) then
 					cached_terminal = "kitty"
 					cached_kitty_listen = sock
 				end
@@ -154,22 +315,19 @@ local function detect_terminal()
 end
 
 local function open_kitty(dir, cmd)
-	if not cached_kitty_listen then
+	local sock = resolve_kitty_socket()
+	if not sock then
 		return false, "kitty socket not found (add to kitty.conf: allow_remote_control yes, listen_on unix:/tmp/mykitty)"
 	end
 
 	-- Step 1: Launch a new tab with the user's default shell
-	local child, err = Command("kitty")
-		:arg({ "@", "--to", cached_kitty_listen, "launch", "--type=tab", "--cwd", dir })
-		:stdout(Command.PIPED)
-		:stderr(Command.PIPED)
-		:spawn()
+	local child, err = spawn_piped("kitty", { "@", "--to", sock, "launch", "--type=tab", "--cwd", dir })
 	if not child then
 		return false, "Failed to spawn kitty: " .. (err or "unknown error")
 	end
-	local output = child:wait_with_output()
-	if not output or not output.status.success then
-		return false, "kitty launch failed on " .. cached_kitty_listen
+	local output = wait_with_output(child)
+	if not output_success(output) then
+		return false, "kitty launch failed on " .. sock
 	end
 
 	-- Step 2: Send the command to the newly created tab
@@ -177,15 +335,13 @@ local function open_kitty(dir, cmd)
 		return true
 	end
 
-	local child2, err2 = Command("kitty")
-		:arg({ "@", "--to", cached_kitty_listen, "send-text", "--match", "recent:0", cmd .. "; exit\r" })
-		:stdout(Command.PIPED)
-		:stderr(Command.PIPED)
-		:spawn()
+	local child2, err2 = spawn_piped("kitty", { "@", "--to", sock, "send-text", "--match", "recent:0", cmd .. "; exit\r" })
 	if not child2 then
 		return false, "Failed to send text: " .. (err2 or "unknown error")
 	end
-	child2:wait()
+	if wait_failed(child2) then
+		return false, "kitty send-text failed on " .. sock
+	end
 	return true
 end
 
@@ -195,15 +351,13 @@ local function open_wezterm(dir, cmd)
 		args = { "cli", "spawn", "--cwd", dir, "--", "sh", "-c", cmd }
 	end
 
-	local child, err = Command("wezterm")
-		:arg(args)
-		:stdout(Command.PIPED)
-		:stderr(Command.PIPED)
-		:spawn()
+	local child, err = spawn_piped("wezterm", args)
 	if not child then
 		return false, "Failed to spawn wezterm: " .. (err or "unknown error")
 	end
-	child:wait()
+	if wait_failed(child) then
+		return false, "wezterm spawn exited unsuccessfully"
+	end
 	return true
 end
 
@@ -213,15 +367,13 @@ local function open_tmux(dir, cmd)
 		args = { "new-window", "-c", dir, "sh", "-c", "sleep 0.2 && exec " .. cmd }
 	end
 
-	local child, err = Command("tmux")
-		:arg(args)
-		:stdout(Command.PIPED)
-		:stderr(Command.PIPED)
-		:spawn()
+	local child, err = spawn_piped("tmux", args)
 	if not child then
 		return false, "Failed to spawn tmux: " .. (err or "unknown error")
 	end
-	child:wait()
+	if wait_failed(child) then
+		return false, "tmux new-window exited unsuccessfully"
+	end
 	return true
 end
 
@@ -245,15 +397,13 @@ end tell]],
 		applescript_escape(dir),
 		input_line
 	)
-	local child, err = Command("osascript")
-		:arg({ "-e", script })
-		:stdout(Command.PIPED)
-		:stderr(Command.PIPED)
-		:spawn()
+	local child, err = spawn_piped("osascript", { "-e", script })
 	if not child then
 		return false, "Failed to run osascript: " .. (err or "unknown error")
 	end
-	child:wait()
+	if wait_failed(child) then
+		return false, "Ghostty AppleScript exited unsuccessfully"
+	end
 	return true
 end
 
@@ -274,15 +424,13 @@ local function open_iterm(dir, cmd)
 end tell]],
 		applescript_escape(full_cmd)
 	)
-	local child, err = Command("osascript")
-		:arg({ "-e", script })
-		:stdout(Command.PIPED)
-		:stderr(Command.PIPED)
-		:spawn()
+	local child, err = spawn_piped("osascript", { "-e", script })
 	if not child then
 		return false, "Failed to run osascript: " .. (err or "unknown error")
 	end
-	child:wait()
+	if wait_failed(child) then
+		return false, "iTerm2 AppleScript exited unsuccessfully"
+	end
 	return true
 end
 
@@ -294,38 +442,49 @@ local openers = {
 	iterm   = open_iterm,
 }
 
+local function notify(msg)
+	pcall(function()
+		ya.notify(msg)
+	end)
+end
+
 function M:setup(opts)
-	if not opts then
+	if type(opts) ~= "table" then
 		return
 	end
-	if opts.terminal then
-		state.terminal = opts.terminal
+	local terminal = normalize_terminal(safe_field(opts, "terminal"))
+	if terminal then
+		state.terminal = terminal
 	end
-	if opts.kitty_listen_on then
-		state.kitty_listen_on = opts.kitty_listen_on
+	local kitty_listen_on = trim_string(safe_field(opts, "kitty_listen_on"))
+	if kitty_listen_on and kitty_listen_on ~= "" then
+		state.kitty_listen_on = kitty_listen_on
+		cached_kitty_listen = kitty_listen_on
 	end
-	if opts.tools then
-		for name, tool in pairs(opts.tools) do
-			state.tools[name] = tool
-		end
+	local tools = safe_field(opts, "tools")
+	if type(tools) == "table" then
+		pcall(function()
+			for name, tool in pairs(tools) do
+				local tool_name = normalize_tool_name(name)
+				if tool_name then
+					local normalized = normalize_tool(tool)
+					if normalized then
+						state.tools[tool_name] = normalized
+					end
+				end
+			end
+		end)
 	end
 end
 
 function M:entry(job)
-	-- Compatible with yazi passing job as string or table
-	if type(job) == "string" then
-		job = { args = { job } }
-	end
-	local tool_name = job.args and job.args[1]
-	if tool_name == "" then
-		tool_name = nil
-	end
+	local tool_name = tool_name_from_job(job)
 	local tool = nil
 	if tool_name then
 		tool = state.tools[tool_name]
 	end
 	if tool_name and not tool then
-		ya.notify({
+		notify({
 			title = "ai-opener",
 			content = "Unknown tool: " .. tool_name,
 			level = "error",
@@ -336,7 +495,7 @@ function M:entry(job)
 
 	local dir = get_target_dir()
 	if not dir then
-		ya.notify({
+		notify({
 			title = "ai-opener",
 			content = "Cannot determine directory",
 			level = "error",
@@ -347,7 +506,7 @@ function M:entry(job)
 
 	local terminal = detect_terminal()
 	if not terminal then
-		ya.notify({
+		notify({
 			title = "ai-opener",
 			content = "Cannot detect terminal. Set terminal in setup(), e.g. require('ai-opener'):setup({ terminal = 'kitty' })",
 			level = "error",
@@ -358,7 +517,7 @@ function M:entry(job)
 
 	local opener = openers[terminal]
 	if not opener then
-		ya.notify({
+		notify({
 			title = "ai-opener",
 			content = "Unsupported terminal: " .. terminal,
 			level = "error",
@@ -373,14 +532,14 @@ function M:entry(job)
 		if tool_name then
 			content = tool_name .. " opened via " .. terminal
 		end
-		ya.notify({
+		notify({
 			title = "ai-opener",
 			content = content,
 			level = "info",
 			timeout = 2,
 		})
 	else
-		ya.notify({
+		notify({
 			title = "ai-opener",
 			content = err or "Failed to open terminal",
 			level = "error",
