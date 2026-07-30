@@ -392,7 +392,7 @@ local function open_ghostty(dir, cmd)
 	set cfg to new surface configuration
 	set initial working directory of cfg to %s
 	%s
-	new tab with configuration cfg
+	new tab in window 1 with configuration cfg
 end tell]],
 		applescript_escape(dir),
 		input_line
