@@ -1,7 +1,7 @@
 # ai-opener.yazi
 
 Open AI coding tools (Claude, Codex, Amp, Gemini, and Aider) in a new terminal tab
-from Yazi, with the working directory set to the current cursor position.
+from Yazi, with the working directory set to the current Yazi directory.
 
 ## Supported Terminals
 
@@ -21,7 +21,7 @@ a live kitty socket it can verify. Leading and trailing whitespace around
 
 ## Compatibility
 
-Maintained against Yazi/Ya `26.5.6`.
+Maintained against Yazi/Ya `26.8.15`.
 
 ## Installation
 
@@ -34,7 +34,7 @@ ya pkg add stellarjmr/ai-opener
 Add keybindings to `~/.config/yazi/keymap.toml`:
 
 Use `plugin ai-opener` without an argument to open a plain terminal in the
-target directory. Pass a tool name, such as `codex`, only when you want to run
+current directory. Pass a tool name, such as `codex`, only when you want to run
 that AI CLI in the new tab.
 
 ```toml
@@ -120,16 +120,16 @@ temporarily unavailable or malformed, the plugin treats it as no tool argument.
 
 ## How It Works
 
-1. Resolves the working directory from the hovered item (directory → use it;
-   file → use the current directory)
+1. Uses Yazi's current directory as the working directory, regardless of the
+   hovered item
 2. Detects the terminal emulator automatically
-3. Opens a new tab in that terminal in the resolved directory
+3. Opens a new tab in that terminal in the current directory
 4. When a tool argument is provided, runs that AI tool and closes the tab when
    the tool exits; without an argument, leaves the shell open without running an
    AI CLI
 
-If Yazi directory metadata is temporarily unavailable or malformed, the plugin
-falls back from the hovered item to the current directory, then reports a
+If Yazi current-directory metadata is temporarily unavailable, malformed, or
+cannot be converted to a path, the plugin reports a
 directory-resolution error instead of opening a terminal without a usable
 directory.
 

@@ -205,15 +205,6 @@ local get_target_dir = ya.sync(function()
 	if not current then
 		return nil
 	end
-	local h = safe_field(current, "hovered")
-	local cha = safe_field(h, "cha")
-	local url = safe_field(h, "url")
-	if h and cha and safe_field(cha, "is_dir") and url then
-		local hovered = safe_tostring(url)
-		if hovered then
-			return hovered
-		end
-	end
 	local cwd = safe_field(current, "cwd")
 	if cwd then
 		return safe_tostring(cwd)
