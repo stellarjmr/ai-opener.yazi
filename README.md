@@ -10,6 +10,7 @@ from Yazi, with the working directory set to the current Yazi directory.
 - **tmux** — via `tmux new-window`
 - **Ghostty** — via AppleScript (macOS, 1.3.0+)
 - **iTerm2** — via AppleScript (macOS, untested)
+- **Rex** — via `rex window new` and `rex send` in the current Rex session
 
 Terminal is auto-detected from Yazi's environment and lightweight terminal
 probes. The `TMUX` environment variable takes precedence over `TERM_PROGRAM`.
@@ -81,7 +82,7 @@ Optionally configure the plugin in `~/.config/yazi/init.lua`:
 ```lua
 require("ai-opener"):setup({
     -- Override auto-detected terminal:
-    -- "kitty", "wezterm", "tmux", "ghostty", or "iterm".
+    -- "kitty", "wezterm", "tmux", "ghostty", "iterm", or "rex".
     -- Product-name aliases such as "WezTerm" and "iTerm2" are accepted.
     -- Leading and trailing whitespace around terminal and kitty socket settings
     -- is ignored.
@@ -142,6 +143,9 @@ directory.
   ```
 - **Ghostty** requires version 1.3.0+ for AppleScript tab creation support.
 - **tmux** works inside any terminal emulator.
+- **Rex** opens a new window (tab) in the session Yazi is running in, using the
+  `rex` CLI from `REX_BIN_DIR` when set. Tool commands are typed into the new
+  interactive shell, so your shell startup files still set up `PATH`.
 
 ## License
 

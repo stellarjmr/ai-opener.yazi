@@ -124,6 +124,9 @@ local function normalize_terminal(terminal)
 	if lowered == "iterm" or lowered == "iterm2" or lowered == "iterm.app" then
 		return "iterm"
 	end
+	if lowered == "rex" then
+		return "rex"
+	end
 	return terminal
 end
 
@@ -283,6 +286,8 @@ local function detect_terminal()
 			cached_terminal = "ghostty"
 		elseif term == "iterm" then
 			cached_terminal = "iterm"
+		elseif term == "rex" then
+			cached_terminal = "rex"
 		end
 	end
 
@@ -425,12 +430,56 @@ end tell]],
 	return true
 end
 
+local function rex_executable()
+	local bin_dir = read_env("REX_BIN_DIR")
+	if bin_dir then
+		return bin_dir .. "/rex"
+	end
+	return "rex"
+end
+
+local function open_rex(dir, cmd)
+	local rex = rex_executable()
+
+	-- Step 1: Open a new window (tab) with an interactive shell in the current
+	-- Rex session, so the user's shell startup files set up PATH and aliases.
+	local child, err = spawn_piped(rex, { "window", "new", "--cwd", dir, "--json" })
+	if not child then
+		return false, "Failed to spawn rex: " .. (err or "unknown error")
+	end
+	local output = wait_with_output(child)
+	if not output_success(output) then
+		return false, "rex window new exited unsuccessfully"
+	end
+
+	if not cmd then
+		return true
+	end
+
+	-- Step 2: Type the command into the new window's terminal block
+	local stdout = safe_field(output, "stdout")
+	local block = type(stdout) == "string" and string.match(stdout, '"(block:[^"]+)"') or nil
+	if not block then
+		return false, "rex window new did not report a terminal block"
+	end
+
+	local child2, err2 = spawn_piped(rex, { "send", "-b", block, cmd .. "; exit\n" })
+	if not child2 then
+		return false, "Failed to send text: " .. (err2 or "unknown error")
+	end
+	if wait_failed(child2) then
+		return false, "rex send exited unsuccessfully"
+	end
+	return true
+end
+
 local openers = {
 	kitty   = open_kitty,
 	wezterm = open_wezterm,
 	tmux    = open_tmux,
 	ghostty = open_ghostty,
 	iterm   = open_iterm,
+	rex     = open_rex,
 }
 
 local function notify(msg)
