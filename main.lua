@@ -275,6 +275,11 @@ local function detect_terminal()
 	local tmux = read_env("TMUX")
 	if tmux then
 		cached_terminal = "tmux"
+	elseif read_env("REX_SESSION") then
+		-- Rex sets REX_SESSION in every terminal it opens. Prefer it over
+		-- TERM_PROGRAM, which users may override (e.g. to "ghostty") so that
+		-- Yazi picks the right image protocol inside Rex.
+		cached_terminal = "rex"
 	else
 		local term = normalize_terminal(read_env("TERM_PROGRAM"))
 		if term == "kitty" then

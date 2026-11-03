@@ -14,6 +14,9 @@ from Yazi, with the working directory set to the current Yazi directory.
 
 Terminal is auto-detected from Yazi's environment and lightweight terminal
 probes. The `TMUX` environment variable takes precedence over `TERM_PROGRAM`.
+Inside Rex, `REX_SESSION` also takes precedence over `TERM_PROGRAM`, so Rex is
+still detected when `TERM_PROGRAM` is overridden (for example to `ghostty` for
+Yazi image previews).
 `TERM_PROGRAM` values are normalized with the same product-name aliases as the
 configured `terminal` option.
 For kitty, the plugin uses a configured `kitty_listen_on`, `KITTY_LISTEN_ON`, or
