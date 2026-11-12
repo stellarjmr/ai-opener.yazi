@@ -25,7 +25,7 @@ a live kitty socket it can verify. Leading and trailing whitespace around
 
 ## Compatibility
 
-Maintained against Yazi/Ya `26.8.15`.
+Maintained against Yazi/Ya `26.9.1`.
 
 ## Installation
 
